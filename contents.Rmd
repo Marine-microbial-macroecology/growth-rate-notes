@@ -1,0 +1,74 @@
+---
+title: "Outline"
+author: "Andrew Irwin"
+date: "10/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Notes on acclimating phytoplankton cultures and measuring growth rate
+ 
+Your goals:
+
+* obtain a high quality estimate of equilibrium growth-rate from semi-continuous batch cultures
+* acclimate cultures to prepare for experiments
+* use pre-experiments to plan your experiment
+ 
+* Culture methods and terminology
+  * Batch, semi-continuous, turbidostat, chemostat
+  * Media (enriched seawater, ASW)
+  * Lag phase, exponential (or log) phase, stationary phase, senescence
+ 
+## Quantification of biomass
+
+* Cell counts, chl fluorescence, extracted chl, C
+* Counting methods: haemocytometer, Sedgewick-rafter, Z2/Coulter counter, flow cytometer
+* Cell size
+* Chl per cell and C per cell change with growth conditions
+ 
+## What limits growth?
+
+* Macronutrients: concentration and ratios
+* Light
+* Temperature
+* pH, CO2
+* Micronutrients (metals, vitamins)
+ 
+## Managing your culture
+
+* What maximum cell density should I use?
+* When should I dilute?
+* How much should I dilute?
+* Is it possible to dilute too much?
+* How often do I need to measure biomass?
+ 
+## Calculating growth rate
+The simplest case
+Combining multiple batch cultures
+What to do with replicates?
+Computing doubling time, number of generations elapsed
+Organizing your data so others can use it
+Value and importance of keeping worksheets up to date
+ 
+How do I know if I’ve found the maximum growth rate?
+ 
+Culture tips
+Shaking, bubbling, or leave-me-alone
+Permute location in incubator
+Does the kind of light matter?
+Attenuating light with filters
+12:12 or some other photoperiod?
+ 
+* Stuff goes wrong. How to fix it.
+  * Cultures won’t grow (check media)
+* Growth rate changes when culture volume changes
+* Too many bacteria
+ 
+## Beyond the scope of these notes
+
+* Controlling pH, trace metals
+* Continuous cultures (turbidostat, chemostat)
+ 
