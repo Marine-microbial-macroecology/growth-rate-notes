@@ -1,0 +1,187 @@
+---
+title: "Simulated growth rate data and analysis"
+author: "Andrew Irwin"
+date: "13/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(broom)
+```
+
+## Goal
+
+I'd like to develop a tool for computing growth rate which will be flexible and easy to use
+for people in our lab. The analysis should handle a number of cases:
+
+* multiple species, treatments, conditions, etc., collectively known as *experiments*
+* multiple replicates
+* tracking replicates through multiple semi-continuous batch dilutions, with tracking of dilution or not
+
+## Growth rate analysis
+
+Growth rate will be computed by regression of log biomass as a function of time. Within an experiment we will assume that growth rate is constant, although the biomass in each replicate or batch could be different.
+
+Ultimately I would like to detect lag phase or outliers automatically.
+
+Biomass can be cell counts (number/volume), fluorescence, chlorophyll concentration, or even optical density.
+
+
+## Simulated data
+
+In this worksheet I will specify a few parameters and then simulate some data for analysis.
+
+Columns in the dataset will be:
+
+* experiment + treatment code (e.g., species, growth conditions), possibly split over several columns
+* date and time of observation
+* replicate (culture line)
+* batch number
+* biomass (any units, but consistent; not log transformed)
+* dilution factor (dimensionless ratio: old culture volume / total new culture volume)
+
+If one batch culture is started from the previous with a known dilution, create a separate line to record the dilution factor and record the time distinct from any cell count observations, so that it is obvious which counts are from before and after the dilution.
+
+If the dilution is known, an extrapolated biomass will be computed and the batch numbers will be discarded. If the dilution factor is not known, a separate intercept will be estimated for each batch.
+
+### Parameters
+
+```{r}
+n_replicates <- 3
+biomass_0 <- 1000 # mean biomass at starting time of batch culture
+biomass_prop_s <- 0.075 # standard deviation of counts as proportion of true value
+record_dilution <- TRUE 
+growth_rate <- 0.8
+start_date <- ymd_hms("2021-03-13 09:30:00")
+days_between_counts <- 2
+dilute_at <- 30000 # target biomass to dilute cultures
+n_counts <- 20 # number of samples to collect in the experiment
+```
+
+Initiate the experiment.
+
+```{r}
+counts <- tibble( experiment = "A", 
+                  date = rep(start_date, n_replicates),
+                  batch = 1,
+                  replicate = 1:n_replicates,
+                  true_biomass = biomass_0 * rnorm(n_replicates, 1, biomass_prop_s),
+                  dilution = NA,
+                  observed_biomass = NA
+                  )
+```
+
+Add observations. Several steps:
+
+* Make the cells grow
+* Count the cells
+* Dilute if necessary, adding a new cell number data (possibly with counts), and incrementing batch number
+
+```{r}
+last_obs <- counts %>% slice_tail(n = n_replicates)
+new_obs <- last_obs %>% mutate( date = date + days_between_counts*86400 - 15*60*(!is.na(dilution)),
+                                dilution = NA,
+                                true_biomass = true_biomass * exp(growth_rate*days_between_counts),
+                                observed_biomass = true_biomass * rnorm(n_replicates, 1, biomass_prop_s)
+)
+counts <- bind_rows(counts, new_obs)
+dilute <- max(new_obs$observed_biomass) > dilute_at
+if (dilute) {
+  dilute_data <- new_obs %>% 
+    mutate(date = date + 15*60,
+           batch = batch + 1,
+           dilution = biomass_0/observed_biomass,
+           true_biomass = true_biomass * dilution,
+           observed_biomass = NA)
+  counts <- bind_rows(counts, dilute_data)
+}
+```
+
+
+## Analysis
+
+Add synthetic biomass
+
+```{r}
+counts <- counts %>% replace_na(list(dilution = 1)) %>%
+  group_by(experiment, replicate) %>%
+  mutate(accumulated_dilution = cumprod(dilution),
+         extrapolated_biomass = observed_biomass / accumulated_dilution,
+         time_d = as.numeric(date - min(date) )/86400)
+```
+
+Plot the observed counts
+
+```{r}
+counts %>% ggplot(aes(date, observed_biomass)) + 
+  geom_point() + 
+  scale_y_log10()
+counts %>% ggplot(aes(date, extrapolated_biomass)) + 
+  geom_point() + 
+  scale_y_log10()
+```
+
+Make regression
+
+```{r}
+lm1 <- lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = counts)
+summary(lm1)
+lm2 <- lm(log(observed_biomass) ~ time_d + factor(replicate) * factor(batch), data = counts)
+summary(lm2)
+```
+
+Just one replicate
+
+```{r}
+lm3 <- lm(log(extrapolated_biomass) ~ time_d , data = counts %>% filter(replicate == 1))
+summary(lm3)
+lm4 <- lm(log(observed_biomass) ~ time_d + factor(batch), data = counts %>% filter(replicate==1))
+summary(lm4)
+```
+
+Average the three replicates, then compute growth rate
+
+```{r}
+lm5 <- lm(log(extrapolated_biomass) ~ time_d , 
+          data = counts %>% group_by(replicate, date) %>% summarize(time_d = mean(time_d), 
+                                                                    extrapolated_biomass = mean(extrapolated_biomass)))
+summary(lm5)
+lm6 <- lm(log(observed_biomass) ~ time_d + factor(batch), 
+          data = counts %>% group_by(replicate, date) %>% summarize(time_d = mean(time_d), 
+                                                                    observed_biomass = mean(observed_biomass),
+                                                                    batch = mean(batch)))
+summary(lm6)
+```
+
+Confindence intervals on growth rate
+
+```{r}
+bind_rows(
+  tidy(lm1, conf.int = TRUE)[2,],
+  tidy(lm2, conf.int = TRUE)[2,],
+  tidy(lm3, conf.int = TRUE)[2,],
+  tidy(lm4, conf.int = TRUE)[2,],
+  tidy(lm5, conf.int = TRUE)[2,],
+  tidy(lm6, conf.int = TRUE)[2,]
+
+)
+```
+
+Two-point growth rates
+
+```{r}
+two_point_rates <- counts %>% na.omit() %>% group_by(replicate) %>%
+  mutate(growth_rate = log(extrapolated_biomass/lag(extrapolated_biomass))/(time_d - lag(time_d))) 
+two_point_rates %>%
+  ggplot(aes(growth_rate)) + geom_histogram(binwidth = 0.02)
+two_point_rates %>%
+  ggplot(aes(growth_rate, y = factor(replicate))) + stat_summary(fun.data = "mean_cl_boot") 
+# mean_cl_normal, mean_cl_boot  # Hmisc
+two_point_rates %>% select(replicate, time_d, growth_rate) %>% filter(!is.na(growth_rate))
+two_point_rates %>% filter(!is.na(growth_rate)) %>% group_by(time_d) %>% summarize(mean_growth_rate = mean(growth_rate, na.rm=TRUE))
+```
+
+
