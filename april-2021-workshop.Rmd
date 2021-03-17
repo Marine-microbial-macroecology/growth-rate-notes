@@ -1,0 +1,137 @@
+---
+title: "Growth rate workshop"
+author: "Andrew Irwin"
+date: "2021-04-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Notes for a Finkel-Irwin workshop on growth rate in April 2021.
+
+## Goals
+
+* Overview
+* Measuring biomass
+* Two point growth rate estimates
+* Growth rate regressions with R 
+  * One batch culture
+  * One series of semi-continuous batch cultures
+  * Multiple replicates of semi-continuous batch cultures
+* Changes in growth rate
+  * Lag phase
+  * Stationary phase
+* When and how much to dilute?
+* Data organization recommendations
+* How to use this method with your own data
+* Exercises
+* Creating simulated data
+
+## Overview
+
+Growth rates are fundamental to lab work on phytoplankton. When we acclimate a 
+phytoplankton culture to a set of growth conditions, one of the ways we assess if
+the culture is acclimated is our ability to measure a constant growth rate with 
+high precision. If you estimate growth rate from just two observations of biomass separated 
+by a day, you should expect fluctuations in your growth rate regardless of how careful
+you are with your cultures, because they way you estimates the biomass in a culture
+will include errors and these errors will propagate into your growth rate calculation.
+Multiple observations of biomass are required to get a good estimate of growth rate. 
+You still need to be careful, because many observations can be used to get a very precise
+estimate of growth rate, even if the growth rate is changing. So you also need to 
+plot your data and in particular the residuals to see if there is a pattern over time
+in the difference between the observed biomass and your predictions of biomass.
+
+## Measuring biomass
+
+You can measure changes in phytoplankton biomass by counting cells, measuring chlorophyll
+fluorescence, or measuring chlorophyll in your culture. (Of course you could measure 
+carbon or other element content directly, but this is a much more time-consuming mesurement.)
+
+All of these measurements have advantages and disadvantages and can be unsuitable 
+if the cultures are not well acclimated.
+
+Regardless of the measurement method you should always record the date and time of the
+observation or when the sample was taken from the culture. Don't just include the "day" 
+since the start of the experiment.
+
+### Cell counting
+
+Cell counts are a direct measure of cell abundance. Counting under the microscope is 
+time-consuming and usually counts the smallest number of cells, possibly leading to 
+uncertainty from small numbers of cells counted. Counting with the Coulter (or Z) counter 
+usually gives counts of thousands or tens of thousands of cells, but if cells are very small, 
+background noise can contaminate your cell counts. Counting with the flow cytometer 
+has the advantage of counting large numbers and can distinguish particles with chlorophyll
+from debris without chlorophyll.
+
+If you count with a microscope you should count about 100 cells and record the volume
+(regions in the haemocytometer or Sedgewick-Rafter chamber) in triplicate from each 
+sample. The role of the triplicate is to show you that you can get approximately the same 
+number of cells per volume in a sample, which gives you a "real-time" confirmation that you
+have counted enough cells to get a good estimate of abundance. If cell abundances are very low
+you may not be able to find this many cells and your technical replicates will let you know
+if you have a good estimate of cell abundance.
+
+### Chlorophyll fluorescence
+
+Chlorophyll fluorescence is the fastest way to measure the biomass and track how it
+changes from day to day. The quantity you get can be converted into cell counts or 
+chlorophyll content if you create a calibration curve from simultaneous measurements of both
+quantities over a sufficient range of concentrations.
+
+Key considerations for chlorophyll fluorescence are that the fluorescence will change depending on the light treatment the cultures are grown in and the light environment immediately before
+the fluorescence measurement is made. Chlorophyll per cell, and thus fluorescence, will
+change with the time of day (relative to the light:dark period) and other growth conditions including irradiance, nutrient concentration, and even temperature. For this reason you should dark-adapt
+your cells for 10-15 minutes before measuring their fluorescence and measure their fluorescence
+at approximately the same time every day (e.g., a fixed number of hours after the incubator lights come on.)
+
+### Chlorophyll content
+
+Chlorophyll content is measured by extracting the chlorophyll from cells in a solvent
+and quantifying the amount using fluorescence or absorbance. This solves the problem of 
+needing to dark adapt the cells but the chlorophyll content of the cells still varies
+with the time of day and so samples should be taken at the same time. Samples can be preserved and 
+measured later in batches, but this is not helpful if your goal is to measure growth rate
+and check the acclimation of your cells.
+
+
+## Two point growth rate estimates
+
+Acclimated phytoplankton that are not limited for resources will grow exponentially
+at a rate $\mu$. This means that their biomass over time can be predicted by 
+the equation
+$$B(t) = B(0)e^{\mu t}.$$
+
+In principle, two observations of biomass taken a known amount of time apart
+is sufficient to estimate the growth rate. In practice, this is very unreliable
+and does not permit you to estimate the uncertainty in your estimate of 
+growth rate. The "two point" estimate of growth rate is 
+$$\mu  = \frac{\log B(t_2) - \log B(t_1)}{t_2-t_1} = \frac{\log B(t)/B(0)}{t}.$$
+
+
+## Growth rate regressions with R 
+
+A much better way to estimate growth rate is from a series of 4 or more observations
+of biomass and linear regression.  The equation is the same, but now you can estimate
+the uncertainty in your estimate. We will organize our data in a standard way and 
+use R to compute growth rate and diagnose if the biomass estimates indicate that
+cells are or are not growing at a constant rate.
+
+### One batch culture
+
+### One series of semi-continuous batch cultures
+  * Multiple replicates of semi-continuous batch cultures
+* Changes in growth rate
+  * Lag phase
+  * Stationary phase
+* When and how much to dilute?
+* Data organization recommendations
+* How to use this method with your own data
+* Exercises
+* Creating simulated data
+
+
+## Creating simulated data
