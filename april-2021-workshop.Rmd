@@ -134,66 +134,73 @@ If one batch culture is started from the previous with a known dilution, create 
 
 If the dilution is known, an extrapolated biomass will be computed and the batch numbers will be discarded. If the dilution factor is not known, a separate intercept will be estimated for each batch.
 
-### Parameters
-
-```{r}
-set.seed(1) # to make the results reproducible
-n_replicates <- 3
-biomass_0 <- 1000 # mean biomass at starting time of batch culture
-biomass_prop_s <- 0.075 # standard deviation of counts as proportion of true value
-record_dilution <- TRUE 
-growth_rate <- 0.8
-start_date <- ymd_hms("2021-03-13 09:30:00")
-days_between_counts <- 2
-dilute_at <- 30000 # target biomass to dilute cultures
-n_counts <- 20 # number of samples to collect in the experiment
-```
-
 ### Simulate the data
 
+To describe the process to simulate count data, provide the following information:
+
+* the growth rate (d$^{-1}$),
+* days between counts (days_between_counts)
+* number of counts to take over the experiment (n_counts)
+* number of replicate bottles (n_replicates)
+* descriptive information (start_date, experiment)
+* initial biomass (biomass_0), carrying capacity (biomass_k),
+* fraction of initial cells non-viable to induce lag phase (fraction_dead)
+* biomass that must be exceeded to trigger a dilution (dilute_at),
+* sampling error for biomass (biomass_prop_s),
+
 ```{r}
-counts <- tibble( experiment = "A", 
+predict_biomass <- function(P0, mu, K=Inf, dt) P0*(exp(mu*dt))/((1-P0/K)+P0/K*exp(mu*dt))
+simulate_counts <- function(growth_rate = 0.8,
+                            days_between_counts = 2,
+                            biomass_0 = 1000, biomass_k = Inf,
+                            biomass_prop_s = 0.1,
+                            fraction_dead = 0,
+                            dilute_at = 30000,
+                            n_counts = 20,
+                            n_replicates = 3, experiment = "A",
+                            start_date = ymd_hms("2021-03-13 09:30:00")) {
+  counts <- tibble( experiment = "A", 
                   date = rep(start_date, n_replicates),
                   batch = 1,
                   replicate = 1:n_replicates,
-                  true_biomass = biomass_0 * rnorm(n_replicates, 1, biomass_prop_s),
-                  dilution = NA,
+                  biomass = biomass_0 * rnorm(n_replicates, 1, biomass_prop_s),
+                  live_cells = biomass*(1-fraction_dead),
+                  dilution = 1,
                   observed_biomass = NA
                   )
-```
-
-Add data.
-
-```{r}
-for (i in 1:n_counts) {
-  last_obs <- counts %>% slice_tail(n = n_replicates)
-  new_obs <- last_obs %>% mutate( date = date + days_between_counts*86400 - 15*60*(!is.na(dilution)),
-                                dilution = NA,
-                                true_biomass = true_biomass * exp(growth_rate*days_between_counts),
-                                observed_biomass = true_biomass * rnorm(n_replicates, 1, biomass_prop_s)
-  )
-  counts <- bind_rows(counts, new_obs)
-  dilute <- max(new_obs$observed_biomass) > dilute_at
-  if (dilute) {
-    dilute_data <- new_obs %>% 
-      mutate(date = date + 15*60,
+  for (i in 1:n_counts) {
+    last_obs <- counts %>% slice_tail(n = n_replicates)
+    new_obs <- last_obs %>% mutate( date = date + days_between_counts*86400 - 15*60*(!is.na(dilution)),
+                                dilution = 1,
+                                biomass = (biomass-live_cells) + 
+                                  predict_biomass(live_cells, growth_rate, biomass_k, days_between_counts),
+                                live_cells = predict_biomass(live_cells, growth_rate, biomass_k, days_between_counts),
+                                observed_biomass = biomass * rnorm(n_replicates, 1, biomass_prop_s)
+    )
+    counts <- bind_rows(counts, new_obs)
+    dilute <- max(new_obs$observed_biomass) > dilute_at
+    if (dilute) {
+      dilute_data <- new_obs %>% 
+        mutate(date = date + 15*60,
              batch = batch + 1,
              dilution = biomass_0/observed_biomass,
-             true_biomass = true_biomass * dilution,
+             biomass = biomass * dilution,
+             live_cells = live_cells * dilution,
              observed_biomass = NA)
-    counts <- bind_rows(counts, dilute_data)
+      counts <- bind_rows(counts, dilute_data)
+    }
   }
+  counts %>% mutate(time_d = as.numeric(date - min(date))/86400) %>%
+    group_by(replicate) %>%
+    mutate(extrapolated_biomass =  biomass / cumprod(dilution) ) %>%
+    ungroup()
 }
 ```
 
-Add time in days and extrapolated biomass.
 
 ```{r}
-counts <- counts %>% mutate(time_d = as.numeric(date - min(date))/86400) %>%
-  replace_na(list(dilution=1)) %>%
-  group_by(replicate) %>%
-  mutate(extrapolated_biomass =  observed_biomass / cumprod(dilution) ) %>%
-  ungroup()
+set.seed(1) # to make the results reproducible
+counts <- simulate_counts(fraction_dead = 0)
 ```
 
 ## Growth rate regressions with R 
@@ -310,8 +317,30 @@ We start a culture with a specified cell concentration, but make a proportion of
 unable to grow. The dead cells will gradually get diluted out as you initiate new cultures
 by serial dilutions.
 
-Calculations...
+```{r}
+counts2 <- simulate_counts(fraction_dead = 0.9)
+counts2 %>%
+  ggplot(aes(date, extrapolated_biomass, color=factor(replicate))) + geom_point() +
+  scale_y_log10() + my_theme +
+  geom_smooth(methdod = "lm")
+```
 
+```{r}
+m2 <- counts2 %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
+augment(m2, counts2) %>% ggplot(aes(date, .resid)) + geom_point()
+m2 %>% tidy(conf.int = TRUE)
+```
+
+Drop a few of the inital lag phase points
+
+```{r}
+counts2ss <- counts2 %>% 
+  filter(row_number() > 6*3) 
+m2b <- counts2ss %>%
+  lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
+augment(m2b, counts2ss) %>% ggplot(aes(date, .resid)) + geom_point()
+m2b %>% tidy(conf.int = TRUE)
+```
 
 
 
@@ -329,11 +358,45 @@ The solution to the logistic growth equation, with a carrying capacity $K$, is
 $$P(t) = P(0)\frac{Ke^{\mu t}}{(K-P(0))+P(0)e^{\mu t}}$$
 
 
+```{r}
+counts3 <- simulate_counts(biomass_k = 75000)
+counts3 %>%
+  ggplot(aes(date, extrapolated_biomass, color=factor(replicate))) + geom_point() +
+  scale_y_log10() + my_theme +
+  geom_smooth(methdod = "lm")
+```
+
+```{r}
+m3 <- counts3 %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
+augment(m3, counts3) %>% ggplot(aes(date, .resid)) + geom_point()
+augment(m3, counts3) %>% ggplot(aes(.resid)) + geom_histogram()
+m3 %>% tidy(conf.int = TRUE)
+```
+
+```{r}
+counts3b <- simulate_counts(biomass_k = 75000, dilute_at = 20000)
+counts3b %>%
+  ggplot(aes(date, extrapolated_biomass, color=factor(replicate))) + geom_point() +
+  scale_y_log10() + my_theme +
+  geom_smooth(methdod = "lm")
+```
+
+```{r}
+m3b <- counts3b %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
+augment(m3b, counts3b) %>% ggplot(aes(date, .resid)) + geom_point()
+augment(m3b, counts3b) %>% ggplot(aes(.resid)) + geom_histogram()
+m3b %>% tidy(conf.int = TRUE)
+```
+
+Early dilution didn't work to solve the density dependence problem.
+
+## When and how much to dilute?
+
+## Data organization recommendations
+
+## How to use this method with your own data
 
 
-* When and how much to dilute?
-* Data organization recommendations
-* How to use this method with your own data
-* Exercises
-* Creating simulated data
+##  Exercises
+
 
