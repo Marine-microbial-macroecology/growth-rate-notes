@@ -7,6 +7,12 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(broom)
+# library(performance)
+# library(see)
+my_theme = theme_bw() + theme(text = element_text(size = 18))
 ```
 
 Notes for a Finkel-Irwin workshop on growth rate in April 2021.
@@ -112,6 +118,84 @@ growth rate. The "two point" estimate of growth rate is
 $$\mu  = \frac{\log B(t_2) - \log B(t_1)}{t_2-t_1} = \frac{\log B(t)/B(0)}{t}.$$
 
 
+## Creating simulated data
+
+In these notes I will simulate data for analysis.
+Columns in the dataset are
+
+* experiment + treatment code (e.g., species, growth conditions), possibly split over several columns
+* date and time of observation
+* replicate (culture line)
+* batch number
+* biomass (any units, but consistent; not log transformed)
+* dilution factor (dimensionless ratio: old culture volume / total new culture volume)
+
+If one batch culture is started from the previous with a known dilution, create a separate line to record the dilution factor and record the time distinct from any cell count observations, so that it is obvious which counts are from before and after the dilution.
+
+If the dilution is known, an extrapolated biomass will be computed and the batch numbers will be discarded. If the dilution factor is not known, a separate intercept will be estimated for each batch.
+
+### Parameters
+
+```{r}
+set.seed(1) # to make the results reproducible
+n_replicates <- 3
+biomass_0 <- 1000 # mean biomass at starting time of batch culture
+biomass_prop_s <- 0.075 # standard deviation of counts as proportion of true value
+record_dilution <- TRUE 
+growth_rate <- 0.8
+start_date <- ymd_hms("2021-03-13 09:30:00")
+days_between_counts <- 2
+dilute_at <- 30000 # target biomass to dilute cultures
+n_counts <- 20 # number of samples to collect in the experiment
+```
+
+### Simulate the data
+
+```{r}
+counts <- tibble( experiment = "A", 
+                  date = rep(start_date, n_replicates),
+                  batch = 1,
+                  replicate = 1:n_replicates,
+                  true_biomass = biomass_0 * rnorm(n_replicates, 1, biomass_prop_s),
+                  dilution = NA,
+                  observed_biomass = NA
+                  )
+```
+
+Add data.
+
+```{r}
+for (i in 1:n_counts) {
+  last_obs <- counts %>% slice_tail(n = n_replicates)
+  new_obs <- last_obs %>% mutate( date = date + days_between_counts*86400 - 15*60*(!is.na(dilution)),
+                                dilution = NA,
+                                true_biomass = true_biomass * exp(growth_rate*days_between_counts),
+                                observed_biomass = true_biomass * rnorm(n_replicates, 1, biomass_prop_s)
+  )
+  counts <- bind_rows(counts, new_obs)
+  dilute <- max(new_obs$observed_biomass) > dilute_at
+  if (dilute) {
+    dilute_data <- new_obs %>% 
+      mutate(date = date + 15*60,
+             batch = batch + 1,
+             dilution = biomass_0/observed_biomass,
+             true_biomass = true_biomass * dilution,
+             observed_biomass = NA)
+    counts <- bind_rows(counts, dilute_data)
+  }
+}
+```
+
+Add time in days and extrapolated biomass.
+
+```{r}
+counts <- counts %>% mutate(time_d = as.numeric(date - min(date))/86400) %>%
+  replace_na(list(dilution=1)) %>%
+  group_by(replicate) %>%
+  mutate(extrapolated_biomass =  observed_biomass / cumprod(dilution) ) %>%
+  ungroup()
+```
+
 ## Growth rate regressions with R 
 
 A much better way to estimate growth rate is from a series of 4 or more observations
@@ -122,16 +206,134 @@ cells are or are not growing at a constant rate.
 
 ### One batch culture
 
+Here is a graph of possible cell counts from a single batch culture.
+
+```{r}
+counts %>% filter(batch == 1, replicate == 1) -> ss1
+ss1 %>%
+  ggplot(aes(date, observed_biomass)) + geom_point() +
+  scale_y_log10() + my_theme
+```
+
+Compute two-point growth rates for each pair of observations one day apart.
+
+```{r}
+ss1 %>% filter(!is.na(observed_biomass)) %>%
+  mutate(growth_rate = log(observed_biomass / lag(observed_biomass))/(time_d - lag(time_d))) %>%
+  select(date, time_d, growth_rate)
+```
+
+Compute a linear regression through these three points.
+
+```{r}
+ss1 %>% lm(log(observed_biomass) ~ time_d, data = .) %>% 
+  tidy(conf.int = TRUE)
+```
+
 ### One series of semi-continuous batch cultures
-  * Multiple replicates of semi-continuous batch cultures
-* Changes in growth rate
-  * Lag phase
-  * Stationary phase
+
+```{r}
+counts %>% filter(replicate == 1) -> ss2
+ss2 %>%
+  ggplot(aes(date, extrapolated_biomass)) + geom_point() +
+  scale_y_log10() + my_theme
+```
+
+Compute two-point growth rates for each pair of observations one day apart.
+
+```{r}
+ss2 %>% filter(!is.na(extrapolated_biomass)) %>%
+  mutate(growth_rate = log(extrapolated_biomass / lag(extrapolated_biomass))/(time_d - lag(time_d))) %>%
+  select(date, time_d, growth_rate)
+```
+
+Compute a linear regression through these three points.
+
+```{r}
+ss2 %>% lm(log(extrapolated_biomass) ~ time_d, data = .) -> m2
+m2 %>% 
+  tidy(conf.int = TRUE)
+```
+
+### Multiple replicates of semi-continuous batch cultures
+
+One batch, with replicates.
+
+```{r}
+counts %>% filter(batch == 1) -> ss3
+ss3 %>%
+  ggplot(aes(date, observed_biomass,
+             color = factor(replicate))) + geom_point() +
+  scale_y_log10() + my_theme
+```
+
+Compute two-point growth rates for each pair of observations one day apart, averaging biomass
+from the three replicates.
+
+```{r}
+ss3 %>% filter(!is.na(observed_biomass)) %>%
+  group_by(date, time_d) %>%
+  summarize(observed_biomass = mean(observed_biomass)) %>%
+  ungroup() %>%
+  mutate(growth_rate = log(observed_biomass / lag(observed_biomass))/(time_d - lag(time_d))) %>%
+  select(date, time_d, growth_rate)
+```
+Compute a linear regression, with a single slope, but a different intercept for each 
+replicate.
+
+```{r}
+ss3 %>% lm(log(observed_biomass) ~ time_d + factor(replicate), data = .) %>% 
+  tidy(conf.int = TRUE)
+```
+
+All batches, with replicates.
+
+```{r}
+counts %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) %>% 
+  tidy(conf.int = TRUE)
+```
+
+## Changes in growth rate
+
+### Lag phase
+
+If you initiate a culture from a cells in stationary phase, for example from a 
+culture that has been in "maintenance mode" and not regularly provided fresh nutrients
+or reduced to low biomass, you should expect to see a "lag phase" in your growth data.
+This can also happen with a culture that is growing well if conditions, such as nutrient
+concentrations in the media are changed.
+
+The most likely explanation for the lag phase is that cells are not well acclimated 
+to the new conditions and so they do not grow well. With an "old" culture it is possible that
+many of the cells you count are not viable at all. We use this idea to simulate a lag phase.
+We start a culture with a specified cell concentration, but make a proportion of them 
+unable to grow. The dead cells will gradually get diluted out as you initiate new cultures
+by serial dilutions.
+
+Calculations...
+
+
+
+
+### Stationary phase
+
+We have only simulated exponential growth. In a real experiment, cell growth will slow
+down once cell density exceeds a threshold. There are many reasons: high pH / low DIC, 
+light attenuation in the culture, and nutrient depletion. We don't model any 
+resources here, so we will simulate this slow down in growth by establishing a carrying capacity.
+The important feature you will see is that growth rate starts to slow down long before the 
+cell density reaches the carrying capacity.
+
+
+The solution to the logistic growth equation, with a carrying capacity $K$, is 
+$$P(t) = P(0)\frac{Ke^{\mu t}}{(K-P(0))+P(0)e^{\mu t}}$$
+
+
+
+
 * When and how much to dilute?
 * Data organization recommendations
 * How to use this method with your own data
 * Exercises
 * Creating simulated data
 
-
-## Creating simulated data
