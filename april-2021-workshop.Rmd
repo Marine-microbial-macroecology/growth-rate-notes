@@ -13,6 +13,7 @@ library(broom)
 # library(performance)
 # library(see)
 my_theme = theme_bw() + theme(text = element_text(size = 18))
+k <- function(x) knitr::kable(x, digits=3) %>% kableExtra::kable_styling(full_width = FALSE)
 ```
 
 Notes for a Finkel-Irwin workshop on growth rate in April 2021.
@@ -148,7 +149,7 @@ To describe the process to simulate count data, provide the following informatio
 * biomass that must be exceeded to trigger a dilution (dilute_at),
 * sampling error for biomass (biomass_prop_s),
 
-```{r}
+```{r include=FALSE}
 predict_biomass <- function(P0, mu, K=Inf, dt) P0*(exp(mu*dt))/((1-P0/K)+P0/K*exp(mu*dt))
 simulate_counts <- function(growth_rate = 0.8,
                             days_between_counts = 2,
@@ -165,13 +166,13 @@ simulate_counts <- function(growth_rate = 0.8,
                   replicate = 1:n_replicates,
                   biomass = biomass_0 * rnorm(n_replicates, 1, biomass_prop_s),
                   live_cells = biomass*(1-fraction_dead),
-                  dilution = 1,
+                  dilution = NA,
                   observed_biomass = NA
                   )
   for (i in 1:n_counts) {
     last_obs <- counts %>% slice_tail(n = n_replicates)
     new_obs <- last_obs %>% mutate( date = date + days_between_counts*86400 - 15*60*(!is.na(dilution)),
-                                dilution = 1,
+                                dilution = NA,
                                 biomass = (biomass-live_cells) + 
                                   predict_biomass(live_cells, growth_rate, biomass_k, days_between_counts),
                                 live_cells = predict_biomass(live_cells, growth_rate, biomass_k, days_between_counts),
@@ -191,6 +192,7 @@ simulate_counts <- function(growth_rate = 0.8,
     }
   }
   counts %>% mutate(time_d = as.numeric(date - min(date))/86400) %>%
+    replace_na(list(dilution = 1)) %>%
     group_by(replicate) %>%
     mutate(extrapolated_biomass =  biomass / cumprod(dilution) ) %>%
     ungroup()
@@ -227,14 +229,14 @@ Compute two-point growth rates for each pair of observations one day apart.
 ```{r}
 ss1 %>% filter(!is.na(observed_biomass)) %>%
   mutate(growth_rate = log(observed_biomass / lag(observed_biomass))/(time_d - lag(time_d))) %>%
-  select(date, time_d, growth_rate)
+  select(date, time_d, growth_rate) %>% k
 ```
 
 Compute a linear regression through these three points.
 
 ```{r}
 ss1 %>% lm(log(observed_biomass) ~ time_d, data = .) %>% 
-  tidy(conf.int = TRUE)
+  tidy(conf.int = TRUE)  %>% k
 ```
 
 ### One series of semi-continuous batch cultures
@@ -251,7 +253,7 @@ Compute two-point growth rates for each pair of observations one day apart.
 ```{r}
 ss2 %>% filter(!is.na(extrapolated_biomass)) %>%
   mutate(growth_rate = log(extrapolated_biomass / lag(extrapolated_biomass))/(time_d - lag(time_d))) %>%
-  select(date, time_d, growth_rate)
+  select(date, time_d, growth_rate) %>% k
 ```
 
 Compute a linear regression through these three points.
@@ -259,7 +261,7 @@ Compute a linear regression through these three points.
 ```{r}
 ss2 %>% lm(log(extrapolated_biomass) ~ time_d, data = .) -> m2
 m2 %>% 
-  tidy(conf.int = TRUE)
+  tidy(conf.int = TRUE) %>% k
 ```
 
 ### Multiple replicates of semi-continuous batch cultures
@@ -283,21 +285,21 @@ ss3 %>% filter(!is.na(observed_biomass)) %>%
   summarize(observed_biomass = mean(observed_biomass)) %>%
   ungroup() %>%
   mutate(growth_rate = log(observed_biomass / lag(observed_biomass))/(time_d - lag(time_d))) %>%
-  select(date, time_d, growth_rate)
+  select(date, time_d, growth_rate) %>% k
 ```
 Compute a linear regression, with a single slope, but a different intercept for each 
 replicate.
 
 ```{r}
 ss3 %>% lm(log(observed_biomass) ~ time_d + factor(replicate), data = .) %>% 
-  tidy(conf.int = TRUE)
+  tidy(conf.int = TRUE) %>% k
 ```
 
 All batches, with replicates.
 
 ```{r}
 counts %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) %>% 
-  tidy(conf.int = TRUE)
+  tidy(conf.int = TRUE) %>% k
 ```
 
 ## Changes in growth rate
@@ -328,7 +330,7 @@ counts2 %>%
 ```{r}
 m2 <- counts2 %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
 augment(m2, counts2) %>% ggplot(aes(date, .resid)) + geom_point()
-m2 %>% tidy(conf.int = TRUE)
+m2 %>% tidy(conf.int = TRUE) %>% k
 ```
 
 Drop a few of the inital lag phase points
@@ -339,7 +341,7 @@ counts2ss <- counts2 %>%
 m2b <- counts2ss %>%
   lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
 augment(m2b, counts2ss) %>% ggplot(aes(date, .resid)) + geom_point()
-m2b %>% tidy(conf.int = TRUE)
+m2b %>% tidy(conf.int = TRUE) %>% k
 ```
 
 
@@ -359,7 +361,21 @@ $$P(t) = P(0)\frac{Ke^{\mu t}}{(K-P(0))+P(0)e^{\mu t}}$$
 
 
 ```{r}
-counts3 <- simulate_counts(biomass_k = 75000)
+counts3 <- simulate_counts(biomass_k = 200000, days_between_counts = 1,
+                          n_counts = 5)
+counts3n <- simulate_counts(biomass_k = Inf, days_between_counts = 1,
+                          n_counts = 5)
+counts3 %>%
+  ggplot(aes(date, observed_biomass)) + 
+  geom_point(aes(color=factor(replicate))) +
+  scale_y_log10() + my_theme + 
+  geom_smooth(method="lm", color="black", linetype = 3) +
+  geom_point(data = counts3n) 
+```
+
+
+```{r}
+counts3 <- simulate_counts(biomass_k = 200000, days_between_counts = 4)
 counts3 %>%
   ggplot(aes(date, extrapolated_biomass, color=factor(replicate))) + geom_point() +
   scale_y_log10() + my_theme +
@@ -370,11 +386,12 @@ counts3 %>%
 m3 <- counts3 %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
 augment(m3, counts3) %>% ggplot(aes(date, .resid)) + geom_point()
 augment(m3, counts3) %>% ggplot(aes(.resid)) + geom_histogram()
-m3 %>% tidy(conf.int = TRUE)
+m3 %>% tidy(conf.int = TRUE) %>% k
 ```
 
 ```{r}
-counts3b <- simulate_counts(biomass_k = 75000, dilute_at = 20000)
+counts3b <- simulate_counts(biomass_k = 200000, days_between_counts = 1,
+                            dilute_at = 20000)
 counts3b %>%
   ggplot(aes(date, extrapolated_biomass, color=factor(replicate))) + geom_point() +
   scale_y_log10() + my_theme +
@@ -385,10 +402,8 @@ counts3b %>%
 m3b <- counts3b %>% lm(log(extrapolated_biomass) ~ time_d + factor(replicate), data = .) 
 augment(m3b, counts3b) %>% ggplot(aes(date, .resid)) + geom_point()
 augment(m3b, counts3b) %>% ggplot(aes(.resid)) + geom_histogram()
-m3b %>% tidy(conf.int = TRUE)
+m3b %>% tidy(conf.int = TRUE) %>% k
 ```
-
-Early dilution didn't work to solve the density dependence problem.
 
 ## When and how much to dilute?
 
