@@ -1,0 +1,86 @@
+---
+title: "Liefer growth calculation"
+author: "Andrew Irwin"
+date: "19/03/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(broom)
+library(janitor)
+liefer <- read_csv("liefer-growth-data.csv") %>% clean_names()
+```
+
+Compute cell numbers, accounting for dilution. Plot cell numbers over time.
+
+```{r}
+liefer2 <- liefer %>% replace_na(list(dilution_factor = 1)) %>%
+  group_by(species, replicate) %>%
+  mutate(total_dilution = cumprod(dilution_factor),
+         extrapolated_cell_density = cell_density / total_dilution)
+liefer2 %>% ggplot(aes(days_in_n_free_media, extrapolated_cell_density)) +
+  geom_point() + 
+  scale_y_log10() + 
+  facet_wrap(~ species, scales = "free_y")
+```
+
+Compute and plot two-point growth rates.
+
+```{r}
+my_mean <- function(x,y) {
+ case_when( is.na(x) ~ y,
+            is.na(y) ~ x,
+            TRUE ~ (x+y)/2)
+}
+liefer3 <- liefer2 %>% 
+  filter(!is.na(extrapolated_cell_density)) %>%
+  mutate(growth_rate_fw = log(extrapolated_cell_density/lag(extrapolated_cell_density))/
+           (days_in_n_free_media - lag(days_in_n_free_media)),
+         growth_rate_bk = log(lead(extrapolated_cell_density)/extrapolated_cell_density)/
+           (lead(days_in_n_free_media) - days_in_n_free_media),
+         growth_rate_cn = my_mean(growth_rate_fw, growth_rate_bk))
+liefer3 %>% ggplot(aes(days_in_n_free_media, growth_rate_cn)) +
+  geom_point() + 
+  facet_wrap(~ species, scales = "free_y")
+```
+
+Estimate maximum growth rate from noisy growth rates and cell quotas. The Droop model for growth rate is 
+$$\mu = \mu_{max}\left(1-\frac{Q_{min}}{Q}\right)$$
+
+We can estimate $Q_{min}$ and $\mu_{max}$ by linear regression with $\mu$ as the response 
+and $1/Q$ as the predictor. The intercept will be the maximum growth rate and the slope is $-\mu_{max}Q_{min}$.
+
+```{r}
+liefer3 %>% ggplot(aes(1/n, growth_rate_cn)) +
+  geom_point() + 
+  facet_wrap(~ species, scales = "free")
+```
+
+This model can be fit for all species simultaneously using `lm` as shown in the next code block, but it takes a bit of effort to interpret the coefficients. 
+
+```{r eval=FALSE}
+m1 <- lm(growth_rate_cn ~ species*replicate + species:nRecip, 
+         data = liefer3 %>% mutate(nRecip = 1/n))
+tidy(m1)
+coefplot::coefplot(m1)
+```
+
+Instead I will fit four models, one for each species. 
+
+```{r}
+library(broom.mixed)
+library(lme4)
+m2 <- liefer3 %>% 
+  group_by(species) %>%
+  nest() %>%
+  mutate(model = map(data, ~ lmer(growth_rate_cn ~ (1|replicate) + I(1/n), data = .)),
+         tidied = map(model, tidy, conf.int=TRUE)) %>%
+  unnest(tidied) %>%
+  select(-data, -model) 
+```
+
+Discard the differences in interept for replicates B and C 
+
+Use Droop differential equation to estimate growth rate.
